@@ -80,8 +80,10 @@ bool Paramaterize::Run() {
 			indice.push_back(static_cast<unsigned>(heMesh->Index(v)));
 	}
 
-	triMesh->Init(indice, positions);
-	triMesh->Update(texcoords);
+	if (show)
+		triMesh->Update(texcoords);
+	else
+		triMesh->Update(positions);
 
 	return true;
 }
@@ -129,11 +131,9 @@ void Paramaterize::Paramaterization() {
 	for (int i = 0; i < nV; ++i) {
 		V* vi = heMesh->Vertices()[i];
 
-		if (!show) {
-			vi->pos.at(0) = resX(i);
-			vi->pos.at(1) = resY(i);
-			vi->pos.at(2) = 0;
-		}
+		vi->pos.at(0) = resX(i);
+		vi->pos.at(1) = resY(i);
+		vi->pos.at(2) = 0;
 
 		texcoords.push_back(pointf2(resX(i), resY(i)));
 	}

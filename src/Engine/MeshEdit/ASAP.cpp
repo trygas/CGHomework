@@ -81,33 +81,47 @@ bool ASAP::Run() {
 			indice.push_back(static_cast<unsigned>(heMesh->Index(v)));
 	}
 
-	triMesh->Init(indice, positions);
-	triMesh->Update(texcoords);
+	if (show) 
+		this->triMesh->Update(texcoords);
+	else
+		this->triMesh->Update(positions);
 
 	return true;
 }
 
 void ASAP::Paramaterization() {
-	LocalFlatern();
-
-	int nP = heMesh->NumPolygons();
 	int nV = heMesh->NumVertices();
-	auto polys = heMesh->Polygons();
-	
-	Eigen::MatrixXd A(6 * nP, 2 * nV + 2 * nP);
-	for (int i = 0; i < nP; ++i) {
-		auto p = polys[i];
-		for (int j = 0; j < 3; ++j) {
-			auto vtj = p->BoundaryVertice()[j];
-			int index = heMesh->Index(vtj);
-			if (index == 0 || index == nV - 1) {
+	int nP = heMesh->NumPolygons();
+	A = Eigen::SparseMatrix<double>(2 * (nV + nP), 2 * (nV + nP));
+	A.setZero();
+	b = Eigen::VectorXd(2 * (nV + nP));
+	b.setZero();
 
-			}
-			
-		}
+	std::cout << "LocalFlatern" << std::endl;
+	LocalFlatern();
+	std::cout << "InitLaplacianMatrix" << std::endl;
+	InitLaplacianMatrix();
+
+	std::cout << "solve matrix" << std::endl;
+	Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
+	solver.compute(A.transpose() * A);
+	if (solver.info() != Eigen::Success) {
+		cout << "compute is error" << endl;
+		return;
 	}
+
+	Eigen::VectorXd res = solver.solve(A.transpose() * b);
+	for (int i = 0; i < nV; ++i) {
+		heMesh->Vertices()[i]->pos.at(0) = res(i);
+		heMesh->Vertices()[i]->pos.at(1) = res(nV + i);
+		heMesh->Vertices()[i]->pos.at(2) = 0;
+		texcoords.push_back(pointf2(res(i), res(nV + i)));
+	}
+
+	return;
 }
 
+// map each polygon to (0, 0) (u0u1, 0), (u0u2cos(theta), u0u2sin(theta))
 void ASAP::LocalFlatern() {
 	int nP = heMesh->NumPolygons();
 	int nV = heMesh->NumVertices();
@@ -115,160 +129,181 @@ void ASAP::LocalFlatern() {
 
 	for (int i = 0; i < nP; ++i) {
 		auto p = polys[i];
-		vecf3 vec0 = p->BoundaryVertice()[0]->pos;
-		vecf3 vec1 = p->BoundaryVertice()[1]->pos;
-		vecf3 vec2 = p->BoundaryVertice()[2]->pos;
-		
-		int index0 = heMesh->Index(p->BoundaryVertice()[0]);
-		int index1 = heMesh->Index(p->BoundaryVertice()[1]);
-		int index2 = heMesh->Index(p->BoundaryVertice()[2]);
-		std::array<int, 3> tempIndex = {index0, index1, index2};
-		indexPerPoly.push_back(tempIndex);
+		if (p != nullptr) {
+			int polyIdx = heMesh->Index(p);
+			V* vec0 = p->BoundaryVertice()[0];
+			V* vec1 = p->BoundaryVertice()[1];
+			V* vec2 = p->BoundaryVertice()[2];
 
-		double cosine[3] = { 0 };
-		cosine[0] = vecf3::cos_theta(vec1 - vec0, vec2 - vec0);
-		cosine[1] = vecf3::cos_theta(vec0 - vec1, vec2 - vec1);
-		cosine[2] = vecf3::cos_theta(vec0 - vec2, vec1 - vec2);
-		
-		std::vector<pointf2> thisPoly;
-		thisPoly.push_back(pointf2(0, 0));
-		thisPoly.push_back(pointf2((vec1 - vec0).norm(), 0));
-		thisPoly.push_back(pointf2((vec2 - vec0).norm() * cosine[0], (vec2 - vec0).norm() * sqrt(1 - cosine[0] * cosine[0])));
-		verticesPerPoly.push_back(thisPoly);
+			double vec0vec1Dist = pointf3::distance(vec0->pos.cast_to<pointf3>(), vec1->pos.cast_to<pointf3>());
+			double vec0vec2Dist = pointf3::distance(vec0->pos.cast_to<pointf3>(), vec2->pos.cast_to<pointf3>());
+			double cos12 = vecf3::cos_theta((vec1->pos - vec0->pos), (vec2->pos - vec0->pos));
+			double sin12 = sqrt(1 - cos12 * cos12);
 
-		
+			// map pos
+			std::map<V*, pointf2> mappedPos;
+			mappedPos[vec0] = { 0,0 };
+			mappedPos[vec1] = { vec0vec1Dist, 0 };
+			mappedPos[vec2] = { vec0vec2Dist * cos12, vec0vec2Dist * sin12 };
+			verticesPerPoly[polyIdx] = mappedPos;
+
+			std::map<V*, double> cot;
+			for (size_t j = 0; j < 3; j++) {
+				double cos = vecf3::cos_theta((p->BoundaryVertice()[j]->pos - p->BoundaryVertice()[(j + 2) % 3]->pos),
+					(p->BoundaryVertice()[(j + 1) % 3]->pos - p->BoundaryVertice()[(j + 2) % 3]->pos));
+				double sin = sqrt(1 - cos * cos);
+				cot[p->BoundaryVertice()[(j + 2) % 3]] = (cos / sin); // store the angle of edge i, i+1. idx is V_{(i+2) %3}
+			}
+			cotPerPoly[polyIdx] = cot;
+		}
 	}
 }
 
-//void ASAP::LocalFlatern() {
-//	random_set<V*> boundary_points;
-//	random_set<V*> inner_points;
-//
-//	auto boundaries = this->heMesh->Boundaries();
-//	if (boundaries.size() != 1) {
-//		cout << "ERROR::Parameterize::DoPara:" << endl
-//			<< "\t" << "got boundaries = " << boundaries.size()
-//			<< " (expect 1)" << endl;
-//		return;
-//	}
-//
-//	for (auto v : boundaries[0]) {
-//		boundary_points.insert(v->Origin());
-//	}
-//
-//	for (auto v : heMesh->Vertices()) {
-//		if (!boundary_points.contains(v)) {
-//			inner_points.insert(v);
-//		}
-//	}
-//
-//	//const float boost_factor = 100;
-//	const float boost_factor = 1;
-//	// Fix our boundary
-//
-//	int points_total = boundary_points.size();
-//	float step = 4.0f / points_total;
-//
-//	float curr = 0;
-//	for (auto v : boundary_points) {
-//		vecf3 new_pos;
-//		if (curr >= 0 && curr < 1) {
-//			new_pos[0] = curr;
-//			new_pos[1] = new_pos[2] = 0;
-//		}
-//		else if (curr >= 1 && curr < 2) {
-//			new_pos[0] = 1;
-//			new_pos[1] = curr - 1;
-//			new_pos[2] = 0;
-//		}
-//		else if (curr >= 2 && curr < 3) {
-//			new_pos[0] = 1 - (curr - 2);
-//			new_pos[1] = 1;
-//			new_pos[2] = 0;
-//		}
-//		else { // curr >= 3; remember to cut off as fp precision is an issue
-//			new_pos[0] = 0;
-//			new_pos[1] = curr > 4 ? 4 : 4 - curr;
-//			new_pos[2] = 0;
-//		}
-//		v->pos = new_pos * boost_factor;
-//		curr += step;
-//	}
-//
-//	// Build sparse matrix
-//	size_t n = inner_points.size();
-//	Eigen::SparseMatrix<double> coeff_mat(n, n);
-//	coeff_mat.setZero();
-//	Eigen::VectorXd b_vec_x = Eigen::VectorXd::Zero(n);
-//	Eigen::VectorXd b_vec_y = Eigen::VectorXd::Zero(n);
-//	Eigen::VectorXd b_vec_z = Eigen::VectorXd::Zero(n);
-//
-//	cout << "coeff mat build start" << endl;
-//
-//	int current_row = 0;
-//	for (auto v : inner_points) {
-//		// vidx CERTAINLY follows order (and it's redundant)
-//		size_t vidx = inner_points.idx(v);
-//		auto adj = v->AdjVertices();
-//		size_t degree = v->Degree();
-//		for (auto adjv : adj) {
-//			// check type
-//			if (boundary_points.contains(adjv)) { // this set is usually smaller
-//				b_vec_x(current_row) += (1.0f / degree) * adjv->pos[0];
-//				b_vec_y(current_row) += (1.0f / degree) * adjv->pos[1];
-//				b_vec_z(current_row) += (1.0f / degree) * adjv->pos[2];
-//			}
-//			else { // inner
-//				assert(inner_points.contains(adjv));
-//				size_t adjidx = inner_points.idx(adjv);
-//				// todo add assert = 0
-//				coeff_mat.insert(current_row, adjidx) = -1.0f / degree;
-//			}
-//		}
-//
-//		// add itself
-//		// todo add assert
-//		coeff_mat.insert(current_row, vidx) = 1;
-//		current_row++;
-//	}
-//
-//
-//	cout << "coeff mat build complete" << endl;
-//
-//	// Solve
-//	Eigen::SparseQR<Eigen::SparseMatrix<double>, Eigen::COLAMDOrdering<int>> solver;
-//
-//	cout << "begin makeCompressed()" << endl;
-//	coeff_mat.makeCompressed();
-//
-//	cout << "begin compute()" << endl;
-//	solver.compute(coeff_mat);
-//	if (solver.info() != Eigen::Success) {
-//		cout << "solver: decomposition was not successful." << endl;
-//		return;
-//	}
-//
-//	cout << "begin solve() for x" << endl;
-//	Eigen::VectorXd res_x = solver.solve(b_vec_x);
-//
-//	cout << "begin solve() for y" << endl;
-//	Eigen::VectorXd res_y = solver.solve(b_vec_y);
-//
-//	cout << "begin solve() for z" << endl;
-//	Eigen::VectorXd res_z = solver.solve(b_vec_z);
-//
-//	// Update vertex coordinates
-//	for (int i = 0; i < n; i++) {
-//		// find the corresponding point
-//		auto v = inner_points[i];
-//		vecf3 new_pos = { res_x(i), res_y(i), res_z(i) }; // works?
-//
-//		//cout << new_pos << endl;
-//		v->pos = new_pos;
-//	}
-//}
-
 void ASAP::InitLaplacianMatrix() {
+	std::cout << "Init u" << std::endl;
+	Initu();
+	std::cout << "Init Lt" << std::endl;
+	InitLt();
+	A.setFromTriplets(triplets.begin(), triplets.end());
+	A.makeCompressed();
+}
 
+void ASAP::Initu() {
+	int nV = heMesh->NumVertices();
+	int nP = heMesh->NumPolygons();
+
+	// fix two points;
+	auto boundaries = heMesh->Boundaries()[0];
+	auto v0 = boundaries[0]->Origin();
+	auto v1 = boundaries[boundaries.size() / 2]->End();
+	int Idx0 = heMesh->Index(v0);
+	int Idx1 = heMesh->Index(v1);
+
+	triplets.push_back(Eigen::Triplet<double>(Idx0, Idx0, 1));
+	triplets.push_back(Eigen::Triplet<double>(nV + Idx0, nV + Idx0, 1));
+	b(Idx0) = 0;
+	b(nV + Idx0) = 0;
+
+	triplets.push_back(Eigen::Triplet<double>(Idx1, Idx1, 1));
+	triplets.push_back(Eigen::Triplet<double>(nV + Idx1, nV + Idx1, 1));
+	b(Idx1) = 1;
+	b(nV + Idx1) = 1;
+
+	// others points
+	for (int i = 0; i < nV; ++i) {
+		auto vertex = heMesh->Vertices()[i];
+		int vertexIdx = heMesh->Index(vertex);
+
+		if (vertexIdx != Idx0 && vertexIdx != Idx1) {
+			double cotSum = 0;
+
+			for (auto adjVertex : vertex->AdjVertices()) {
+				int adjIdx = heMesh->Index(adjVertex);
+				auto edge = vertex->EdgeWith(adjVertex);
+				auto he0 = edge->HalfEdge();
+				auto he1 = edge->HalfEdge()->Pair();
+
+				double cot0 = 0;
+				double cot1 = 0;
+
+				auto triangle0 = he0->Polygon();
+				// 当这条边只与一个三角形相接
+				if (triangle0 != nullptr) {
+					auto tr0Ver2 = he0->Next()->End();
+					int tri0Idx = heMesh->Index(triangle0);
+
+					cot0 = cotPerPoly[tri0Idx][tr0Ver2];
+					map<V*, pointf2> mappedPoints = verticesPerPoly[tri0Idx];
+					// Lt
+					triplets.push_back(Eigen::Triplet<double>(vertexIdx, 2 * nV + tri0Idx, -cot0 * (mappedPoints[vertex][0] - mappedPoints[adjVertex][0])));
+					triplets.push_back(Eigen::Triplet<double>(vertexIdx, 2 * nV + nP + tri0Idx, -cot0 * (mappedPoints[vertex][1] - mappedPoints[adjVertex][1])));
+					triplets.push_back(Eigen::Triplet<double>(nV + vertexIdx, 2 * nV + nP + tri0Idx, cot0 * (mappedPoints[vertex][0] - mappedPoints[adjVertex][0])));
+					triplets.push_back(Eigen::Triplet<double>(nV + vertexIdx, 2 * nV + tri0Idx, -cot0 * (mappedPoints[vertex][1] - mappedPoints[adjVertex][1])));
+				}
+
+				auto triangle1 = he1->Polygon();
+				if (triangle1 != nullptr) {
+					auto tr1Ver2 = he1->Next()->End();
+					int tri1Idx = heMesh->Index(triangle1);
+
+					cot1 = cotPerPoly[tri1Idx][tr1Ver2];
+					map<V*, pointf2> mappedPoints = verticesPerPoly[tri1Idx];
+					// Lt
+					triplets.push_back(Eigen::Triplet<double>(vertexIdx, 2 * nV + tri1Idx, -cot1 * (mappedPoints[vertex][0] - mappedPoints[adjVertex][0])));
+					triplets.push_back(Eigen::Triplet<double>(vertexIdx, 2 * nV + nP + tri1Idx, -cot1 * (mappedPoints[vertex][1] - mappedPoints[adjVertex][1])));
+					triplets.push_back(Eigen::Triplet<double>(nV + vertexIdx, 2 * nV + nP + tri1Idx, cot1 * (mappedPoints[vertex][0] - mappedPoints[adjVertex][0])));
+					triplets.push_back(Eigen::Triplet<double>(nV + vertexIdx, 2 * nV + tri1Idx, -cot1 * (mappedPoints[vertex][1] - mappedPoints[adjVertex][1])));
+				}
+
+				cotSum += (cot0 + cot1);
+				triplets.push_back(Eigen::Triplet<double>(vertexIdx, adjIdx, -(cot0 + cot1)));
+				triplets.push_back(Eigen::Triplet<double>(nV + vertexIdx, nV + adjIdx, -(cot0 + cot1)));
+			}
+
+			triplets.push_back(Eigen::Triplet<double>(vertexIdx, vertexIdx, cotSum));
+			triplets.push_back(Eigen::Triplet<double>(nV + vertexIdx, nV + vertexIdx, cotSum));
+		}
+	}
+}
+
+void ASAP::InitLt() {
+	int nP = heMesh->NumPolygons();
+	int nV = heMesh->NumVertices();
+	auto polys = heMesh->Polygons();
+	
+	for (int i = 0; i < nP; ++i) {
+		auto p = polys[i];
+		auto vertice = p->BoundaryVertice();
+		int pIdx = heMesh->Index(p);
+		
+		auto vertex0 = vertice[0];
+		auto vertex1 = vertice[1];
+		auto vertex2 = vertice[2];
+		int vertex0Idx = heMesh->Index(vertex0);
+		int vertex1Idx = heMesh->Index(vertex1);
+		int vertex2Idx = heMesh->Index(vertex2);
+
+		double cot0 = cotPerPoly[i][vertex0];
+		double cot1 = cotPerPoly[i][vertex1];
+		double cot2 = cotPerPoly[i][vertex2];
+
+		pointf2 mappedVec0 = verticesPerPoly[i][vertex0];
+		pointf2 mappedVec1 = verticesPerPoly[i][vertex1];
+		pointf2 mappedVec2 = verticesPerPoly[i][vertex2];
+
+		double deltaX01 = mappedVec0[0] - mappedVec1[0];
+		double deltaX12 = mappedVec1[0] - mappedVec2[0];
+		double deltaX20 = mappedVec2[0] - mappedVec0[0];
+
+		double deltaY01 = mappedVec0[1] - mappedVec0[1];
+		double deltaY12 = mappedVec1[1] - mappedVec2[1];
+		double deltaY20 = mappedVec2[1] - mappedVec0[1];
+
+		// a
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + pIdx, 2 * nV + pIdx, -(cot2 * (deltaX01 * deltaX01 + deltaY01 * deltaY01) +
+																				  cot0 * (deltaX12 * deltaX12 + deltaY12 * deltaY12) +
+																				  cot1 * (deltaX20 * deltaX20 + deltaY20 * deltaY20))));
+		// ux
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + pIdx, vertex0Idx, cot2 * deltaX01 - cot1 * deltaX20));
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + pIdx, vertex1Idx, cot0 * deltaX12 - cot2 * deltaX01));
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + pIdx, vertex2Idx, cot1 * deltaX20 - cot0 * deltaX12));
+		// uy
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + pIdx, nV + vertex0Idx, cot2 * deltaY01 - cot1 * deltaY20));
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + pIdx, nV + vertex1Idx, cot0 * deltaY12 - cot2 * deltaY01));
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + pIdx, nV + vertex2Idx, cot1 * deltaY20 - cot0 * deltaY12));
+		
+		// b
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + nP + pIdx, 2 * nV + nP + pIdx, -(cot2 * (deltaX01 * deltaX01 + deltaY01 * deltaY01) +
+																							cot0 * (deltaX12 * deltaX12 + deltaY12 * deltaY12) +
+																							cot1 * (deltaX20 * deltaX20 + deltaY20 * deltaY20))));
+		// ux
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + nP + pIdx, vertex0Idx, cot2 * deltaY01 - cot1 * deltaY20));
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + nP + pIdx, vertex1Idx, cot0 * deltaY12 - cot2 * deltaY01));
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + nP + pIdx, vertex2Idx, cot1 * deltaY20 - cot0 * deltaY12));
+		// uy
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + nP + pIdx, nV + vertex0Idx, - (cot2 * deltaX01 - cot1 * deltaX20)));
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + nP + pIdx, nV + vertex1Idx, - (cot0 * deltaX12 - cot2 * deltaX01)));
+		triplets.push_back(Eigen::Triplet<double>(2 * nV + nP + pIdx, nV + vertex2Idx, - (cot1 * deltaX20 - cot0 * deltaX12)));
+	}
 }
 

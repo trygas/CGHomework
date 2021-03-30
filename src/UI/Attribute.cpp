@@ -9,6 +9,7 @@
 #include <Engine/MeshEdit/ShortestPath.h>
 #include <Engine/MeshEdit/MST.h>
 #include <Engine/MeshEdit/ASAP.h>
+#include <Engine/MeshEdit/ARAP.h>
 
 #include <Engine/Scene/SObj.h>
 #include <Engine/Scene/AllComponents.h>
@@ -367,6 +368,7 @@ void Attribute::ComponentVisitor::ImplVisit(Ptr<TriMesh> mesh) {
 
 	grid->AddButton("Paramaterize", [mesh, pOGLW = attr->pOGLW]() {
 		auto paramaterize = Paramaterize::New(mesh);
+		paramaterize->SetDisplay(false);
 		if (paramaterize->Run())
 			printf("Paramaterize done\n");
 		pOGLW->DirtyVAO(mesh);
@@ -380,11 +382,44 @@ void Attribute::ComponentVisitor::ImplVisit(Ptr<TriMesh> mesh) {
 		pOGLW->DirtyVAO(mesh);
 	});
 
+	grid->AddButton("ASAP", [mesh, pOGLW = attr->pOGLW](){
+		auto asap = ASAP::New(mesh);
+		asap->SetDisplay(false);
+		if (asap->Run())
+			printf("ASAP done\n");
+		pOGLW->DirtyVAO(mesh);
+	});
+
 	grid->AddButton("ASAP Origin Mesh", [mesh, pOGLW = attr->pOGLW](){
 		auto asap = ASAP::New(mesh);
 		asap->SetDisplay(true);
 		if (asap->Run())
 			printf("ASAP done\n");
+		pOGLW->DirtyVAO(mesh);
+	});
+
+	int* iter = new int(5);
+	grid->AddEditVal("-ARAP Iter Num", *iter, 1, 100, 99);
+	double* errorThreshold = new double(0.01);
+	grid->AddEditVal("-ARAP Error Threshold", *errorThreshold, 0, 1, 99);
+
+	grid->AddButton("ARAP", [iter, errorThreshold, mesh, pOGLW = attr->pOGLW](){
+		auto arap = ARAP::New(mesh);
+		arap->SetDisplay(false);
+		arap->SetIter(*iter);
+		arap->SetErrorThreshold(*errorThreshold);
+		if (arap->Run())
+			printf("ARAP done\n");
+		pOGLW->DirtyVAO(mesh);
+	});
+
+	grid->AddButton("ARAP Origin Mesh", [iter, errorThreshold, mesh, pOGLW = attr->pOGLW](){
+		auto arap = ARAP::New(mesh);
+		arap->SetDisplay(true);
+		arap->SetIter(*iter);
+		arap->SetErrorThreshold(*errorThreshold);
+		if (arap->Run())
+			printf("ARAP done\n");
 		pOGLW->DirtyVAO(mesh);
 	});
 

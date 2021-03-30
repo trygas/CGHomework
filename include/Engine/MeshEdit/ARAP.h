@@ -12,12 +12,12 @@ namespace Ubpa {
 	class MinSurf;
 
 	// mesh boundary == 1
-	class ASAP : public HeapObj {
+	class ARAP : public HeapObj {
 	public:
-		ASAP(Ptr<TriMesh> triMesh);
+		ARAP(Ptr<TriMesh> triMesh);
 	public:
-		static const Ptr<ASAP> New(Ptr<TriMesh> triMesh) {
-			return Ubpa::New<ASAP>(triMesh);
+		static const Ptr<ARAP> New(Ptr<TriMesh> triMesh) {
+			return Ubpa::New<ARAP>(triMesh);
 		}
 	public:
 		void Clear();
@@ -27,6 +27,12 @@ namespace Ubpa {
 
 		void SetDisplay(bool isShow) {
 			show = isShow;
+		}
+		void SetIter(int times) {
+			iterTimes = times;
+		}
+		void SetErrorThreshold(double threshold) {
+			errorThreshold = threshold;
 		}
 
 	private:
@@ -43,21 +49,26 @@ namespace Ubpa {
 	private:
 		void Paramaterization();
 		void LocalFlatern();
-		void InitLaplacianMatrix();
-		void InitLt();
-		void Initu();
-		
+		void LocalUpdate();
+		double GlobalUpdate();
+		void InitA();
+		void Initb();
+
 	private:
 		Ptr<TriMesh> triMesh;
 		const Ptr<HEMesh<V>> heMesh; // vertice order is same with triMesh
 
 		bool                 show;
+		int                  iterTimes = 5;
+		double               errorThreshold = 0.01;
 		std::map<int, std::map<V*, double> > cotPerPoly;
 		std::map<int, std::map<V*, pointf2> > verticesPerPoly;
+		std::map<int, Eigen::Matrix<double, 2, 2> > LtMatrix;
 
 		std::vector<pointf2> texcoords;
 		Eigen::SparseMatrix<double> A;
-		Eigen::VectorXd b;
+		Eigen::MatrixXd b;
 		std::vector<Eigen::Triplet<double> > triplets;
+		Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
 	};
 }
