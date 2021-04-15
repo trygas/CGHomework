@@ -10,6 +10,7 @@
 #include <Engine/MeshEdit/MST.h>
 #include <Engine/MeshEdit/ASAP.h>
 #include <Engine/MeshEdit/ARAP.h>
+#include <Engine/MeshEdit/HybridParamaterize.h>
 
 #include <Engine/Scene/SObj.h>
 #include <Engine/Scene/AllComponents.h>
@@ -420,6 +421,31 @@ void Attribute::ComponentVisitor::ImplVisit(Ptr<TriMesh> mesh) {
 		arap->SetErrorThreshold(*errorThreshold);
 		if (arap->Run())
 			printf("ARAP done\n");
+		pOGLW->DirtyVAO(mesh);
+	});
+
+	double* lambda = new double(0.01);
+	grid->AddEditVal("-Hybrid lambda", *lambda, 0, 1, 100);
+
+	grid->AddButton("Hybrid", [iter, errorThreshold, lambda, mesh, pOGLW = attr->pOGLW](){
+		auto hybrid = HybridParamaterize::New(mesh);
+		hybrid->SetDisplay(false);
+		hybrid->SetIter(*iter);
+		hybrid->SetErrorThreshold(*errorThreshold);
+		//hybrid->SetLambda(*lambda);
+		if (hybrid->Run())
+			printf("Hybrid done\n");
+		pOGLW->DirtyVAO(mesh);
+	});
+
+	grid->AddButton("Hybrid Origin Mesh", [iter, errorThreshold, lambda, mesh, pOGLW = attr->pOGLW](){
+		auto hybrid = HybridParamaterize::New(mesh);
+		hybrid->SetDisplay(true);
+		hybrid->SetIter(*iter);
+		hybrid->SetErrorThreshold(*errorThreshold);
+		//hybrid->SetLambda(*lambda);
+		if (hybrid->Run())
+			printf("Hybrid done\n");
 		pOGLW->DirtyVAO(mesh);
 	});
 
